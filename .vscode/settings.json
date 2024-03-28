@@ -1,0 +1,9 @@
+{
+    "makefile.launchConfigurations": [
+        {
+            "cwd": "/home/denis/OsispKП/Shagun_OSISP_prj_2024",
+            "binaryPath": "/home/denis/OsispKП/Shagun_OSISP_prj_2024/cppaudiocapture",
+            "binaryArgs": []
+        }
+    ]
+}
