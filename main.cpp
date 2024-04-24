@@ -15,7 +15,6 @@
 #include <dirent.h>
 
 #include <limits.h>
-#include <unistd.h>
 
 #include <getopt.h>
 #include <stdbool.h>
@@ -27,6 +26,9 @@
 #include <locale.h>
 #include <chrono>
 #include <thread>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/videodev2.h>
 
 using namespace std;
 #define SAMPLE_RATE 44100
@@ -37,31 +39,32 @@ using namespace std;
 
 bool windwow(Display *display, Window root_window) {
     int screen = DefaultScreen(display);
-    
     // Создаем всплывающее окно
     Window window = XCreateSimpleWindow(display, root_window, 0, 0, 300, 200, 1,
                                         BlackPixel(display, screen), WhitePixel(display, screen));
     XSelectInput(display, window, ExposureMask | ButtonPressMask);
 
     // Устанавливаем заголовок окна
-    XStoreName(display, window, "Всплывающее окно");
+    XStoreName(display, window, "Alarm");
 
     // Создаем текстовую метку
-    XFontStruct *font_info = XLoadQueryFont(display, "fixed");
-    if (font_info == NULL) {
-        fprintf(stderr, "Unable to load font.\n");
-        return true;
+    XFontStruct *font_info;
+    font_info = XLoadQueryFont(display, "fixed");
+    if (!font_info) {
+    fprintf(stderr, "Failed to load font\n");
+    exit(1);
     }
+
 
     GC gc = XCreateGC(display, window, 0, 0);
     XSetFont(display, gc, font_info->fid);  
 
-    const char *text = "Хотите продолжить?";
+    const char *text = "This is your activities?";
     XDrawString(display, window, gc, 50, 50, text, strlen(text));
 
     // Создаем кнопки "Да" и "Нет"
-    const char *yes_label = "Да";
-    const char *no_label = "Нет";
+    const char *yes_label = "Yes";
+    const char *no_label = "No";
     int button_width = 60;
     int button_height = 40;
     int button_x = 50;
@@ -114,6 +117,17 @@ bool windwow(Display *display, Window root_window) {
     }
 }
 // Функция для поиска и завершения процессов, использующих микрофон
+void writePIDToFile(int pid) {
+    FILE *file = fopen("microphone_processes.txt", "r+");
+    if (file == NULL) {
+        perror("Ошибка при открытии файла для записи PID");
+        exit(1);
+    }
+
+    fprintf(file, "%d\n", pid);
+    fclose(file);
+}
+
 bool listMicrophoneProcesses() {
     DIR *dir;
     struct dirent *entry;
@@ -144,6 +158,8 @@ bool listMicrophoneProcesses() {
                         if (strstr(line, "audio") != NULL || strstr(line, "sound") != NULL) {
                             printf("Процесс с PID %s использует микрофон.\n", entry->d_name);
                             hasMicrophoneProcesses = 1;
+                            // Записываем PID процесса в файл
+                            writePIDToFile(atoi(entry->d_name));
                         }
                         break;
                     }
@@ -152,9 +168,7 @@ bool listMicrophoneProcesses() {
             }
         }
     }
-
     closedir(dir);
-
     if (!hasMicrophoneProcesses) {
         printf("Не найдено процессов, использующих микрофон.\n");
         return false;
@@ -163,60 +177,97 @@ bool listMicrophoneProcesses() {
 }
 
 // Функция для поиска и завершения процессов, использующих микрофон
-void findAndKillMicrophoneProcesses(Display *display, Window root_window) {
-    bool ckeck;
-    // Выводим список процессов, использующих микрофон
-    if(listMicrophoneProcesses())
-    {
-        ckeck=windwow(display,root_window);
-    }
-    if (ckeck) {
-        // Завершаем процессы, использующие микрофон
-        DIR *dir;
-        struct dirent *entry;
-        char path[MAX_LINE_LENGTH];
-        char line[MAX_LINE_LENGTH];
+bool compareFiles() {
+    FILE *file1 = fopen("microphone_processes.txt", "r");
+    FILE *file2 = fopen("previous_microphone_processes.txt", "r");
 
-        // Открываем каталог /proc
-        dir = opendir(PROC_DIRECTORY);
-        if (dir == NULL) {
-            perror("Ошибка при открытии каталога /proc");
+    if (file1 == NULL || file2 == NULL) {
+        perror("Ошибка при открытии файлов");
+        exit(1);
+    }
+
+    char line1[MAX_LINE_LENGTH];
+    char line2[MAX_LINE_LENGTH];
+
+    bool mismatch = false;
+
+    while (fgets(line1, sizeof(line1), file1) != NULL) {
+        bool found = false;
+        rewind(file2); // Сбрасываем указатель файла 2 на начало для каждой строки файла 1
+        while (fgets(line2, sizeof(line2), file2) != NULL) {
+            if (strcmp(line1, line2) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            printf("Найден лишний процесс с PID: %s\n", line1);
+            mismatch = true;
+        }
+    }
+
+    fclose(file1);
+    fclose(file2);
+
+    return mismatch;
+}
+
+void findAndKillMicrophoneProcesses(Display *display, Window root_window) {
+    bool check = false;
+    
+    // Выводим список процессов, использующих микрофон
+    if (listMicrophoneProcesses()) {
+        // Проверяем наличие лишних процессов
+        check = compareFiles();
+    }
+    if(check)
+    {   
+       check = !(windwow(display,root_window));
+    }
+    if (check) {   
+        // Открываем файл с PID процессов
+        FILE *file = fopen("microphone_processes.txt", "r");
+        if (file == NULL) {
+            perror("Ошибка при открытии файла с PID");
             exit(1);
         }
 
-        // Читаем содержимое каталога /proc
-        while ((entry = readdir(dir)) != NULL) {
-            // Проверяем, что это каталог и его имя является числом (PID)
-            if (entry->d_type == DT_DIR && atoi(entry->d_name) != 0) {
-                snprintf(path, sizeof(path), "%s/%s/status", PROC_DIRECTORY, entry->d_name);
+        char line[MAX_LINE_LENGTH];
+        
+        // Создаем временный файл для записи обновленного списка PID процессов
+        FILE *tempFile = fopen("temp_microphone_processes.txt", "w");
+        if (tempFile == NULL) {
+            perror("Ошибка при создании временного файла");
+            exit(1);
+        }
 
-                // Открываем файл /proc/<PID>/status
-                FILE *fp = fopen(path, "r");
-                if (fp != NULL) {
-                    // Ищем строку с именем процесса
-                    while (fgets(line, sizeof(line), fp) != NULL) {
-                        if (strncmp(line, "Name:", 5) == 0) {
-                            // Если процесс связан с микрофоном, завершаем его
-                            if (strstr(line, "audio") != NULL || strstr(line, "sound") != NULL) {
-                                // Попытка завершить процесс
-                                if (kill(atoi(entry->d_name), SIGTERM) == 0) {
-                                    printf("Процесс с PID %s успешно завершен.\n", entry->d_name);
-                                } else {
-                                    perror("Ошибка при завершении процесса");
-                                }
-                            }
-                            break;
-                        }
-                    }
-                    fclose(fp);
-                }
+        // Завершаем лишние процессы и удаляем соответствующие записи из файла
+        while (fgets(line, sizeof(line), file) != NULL) {
+            int pid = atoi(line);
+            printf("Завершение процесса с PID: %d\n", pid);
+            if (kill(pid, SIGTERM) == 0) {
+                printf("Процесс успешно завершен.\n");
+            } else {
+                perror("Ошибка при завершении процесса");
             }
         }
-        closedir(dir);
+
+        fclose(file);
+        fclose(tempFile);
+        
+        // Заменяем исходный файл с PID процессов обновленным списком
+        if (rename("temp_microphone_processes.txt", "microphone_processes.txt") != 0) {
+            perror("Ошибка при замене файла");
+            exit(1);
+        }
     } else {
-        printf("Выполнение метода завершено.\n");
+        printf("Нет лишних процессов для завершения.\n");
     }
+
+    // Обновляем файл с предыдущими PID процессами
+    system("cp microphone_processes.txt previous_microphone_processes.txt");
 }
+
 
 void deleteExtraFiles(const char *file1, const char *file2) {
     FILE *fp1, *fp2;
@@ -414,13 +465,20 @@ void dirwalkFile(char *path, bool l_opt, bool d_opt, bool f_opt, bool s_opt, FIL
 }
 
 int main() {
-    Display *display = XOpenDisplay(":0");
-    if (display == NULL) {
+    Display *displayFile = XOpenDisplay(":0");
+    if (displayFile == NULL) {
         fprintf(stderr, "Unable to open display.\n");
         return 1;
     }
-    int screen = DefaultScreen(display);
-    Window root_window = RootWindow(display, screen);
+     Display *displayAudio = XOpenDisplay(":0");
+    if (displayAudio == NULL) {
+        fprintf(stderr, "Unable to open display.\n");
+        return 1;
+    }
+    int screenFile = DefaultScreen(displayFile);
+    Window root_window_file = RootWindow(displayFile, screenFile);
+    int screenAudio = DefaultScreen(displayAudio);
+    Window root_window_audio = RootWindow(displayAudio, screenAudio);
     bool l_opt = true;
     bool d_opt = true;
     bool f_opt = true;
@@ -434,7 +492,9 @@ int main() {
     }
     dirwalkFile("/home/denis/testfolde",l_opt,d_opt,f_opt,s_opt,outputFile);
     fclose(outputFile);
-    compareAndUpdateFiles(outputFilePath,targetFilePath,display,root_window);
-    findAndKillMicrophoneProcesses(display,root_window);
+    compareAndUpdateFiles(outputFilePath,targetFilePath,displayFile,root_window_file);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    findAndKillMicrophoneProcesses(displayAudio,root_window_audio);
+    
     return EXIT_SUCCESS;
 }
