@@ -37,7 +37,7 @@ using namespace std;
 #define PROC_DIRECTORY "/proc"
 #define MAX_LINE_LENGTH 256
 
-bool windwow(Display *display, Window root_window) {
+bool windwow(Display *display, Window root_window,const char *texts) {
     int screen = DefaultScreen(display);
     // Создаем всплывающее окно
     Window window = XCreateSimpleWindow(display, root_window, 0, 0, 300, 200, 1,
@@ -59,7 +59,7 @@ bool windwow(Display *display, Window root_window) {
     GC gc = XCreateGC(display, window, 0, 0);
     XSetFont(display, gc, font_info->fid);  
 
-    const char *text = "This is your activities?";
+    const char *text = texts;
     XDrawString(display, window, gc, 50, 50, text, strlen(text));
 
     // Создаем кнопки "Да" и "Нет"
@@ -116,6 +116,58 @@ bool windwow(Display *display, Window root_window) {
         }
     }
 }
+
+char* execute_command(const char* command) {
+    // Открываем поток для выполнения команды
+    FILE* fp = popen(command, "r");
+    if (fp == NULL) {
+        return NULL;
+    }
+
+    // Буфер для хранения вывода команды
+    char buffer[1024];
+    char* result = (char*)malloc(sizeof(char) * 1024);
+    strcpy(result, "");
+
+    // Читаем вывод команды
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+        strcat(result, buffer);
+    }
+
+    // Закрываем поток
+    pclose(fp);
+
+    return result;
+}
+
+// Функция для нахождения PID процесса, использующего камеру
+int find_camera_process_pid() {
+    // Команда для поиска процесса, связанного с использованием камеры
+    const char* command = "lsof /dev/video0";
+
+    // Выполняем команду и получаем ее вывод
+    char* output = execute_command(command);
+    if (output == NULL) {
+        printf("Ошибка выполнения команды\n");
+        return -1;
+    }
+
+    // Парсим вывод команды для нахождения PID процесса
+    char* pid_str = strtok(output, " ");
+    while (pid_str != NULL) {
+        // Проверяем, является ли строка числом (PID)
+        int pid = atoi(pid_str);
+        if (pid > 0) {
+            free(output);
+            return pid;
+        }
+        pid_str = strtok(NULL, " ");
+    }
+
+    free(output);
+    return -1; // Если PID не найден
+}
+
 // Функция для поиска и завершения процессов, использующих микрофон
 void writePIDToFile(int pid) {
     FILE *file = fopen("microphone_processes.txt", "r+");
@@ -214,7 +266,7 @@ bool compareFiles() {
 
 void findAndKillMicrophoneProcesses(Display *display, Window root_window) {
     bool check = false;
-    
+     const char *texts = "Microfone is work.It is your activitity";
     // Выводим список процессов, использующих микрофон
     if (listMicrophoneProcesses()) {
         // Проверяем наличие лишних процессов
@@ -222,7 +274,7 @@ void findAndKillMicrophoneProcesses(Display *display, Window root_window) {
     }
     if(check)
     {   
-       check = !(windwow(display,root_window));
+       check = !(windwow(display,root_window,texts));
     }
     if (check) {   
         // Открываем файл с PID процессов
@@ -337,6 +389,7 @@ int locale_strcmp(const struct dirent **a, const struct dirent **b) {
     return strcoll((*a)->d_name, (*b)->d_name);
 }
 void compareAndUpdateFiles(const char *sourceFilePath, const char *targetFilePath, Display *display, Window root_window) {
+    const char *texts = "Find suspicious files.It is your activitity";
     FILE *sourceFile = fopen(sourceFilePath, "r");
     FILE *targetFile = fopen(targetFilePath, "r+");
 
@@ -364,7 +417,7 @@ void compareAndUpdateFiles(const char *sourceFilePath, const char *targetFilePat
 
         // Write the content of the source file to the target file
         fseek(targetFile, 0, SEEK_SET);
-        if(windwow(display,root_window)==false)
+        if(windwow(display,root_window,texts)==false)
         {
             deleteExtraFiles(sourceFilePath,targetFilePath);
             printf("Suspicious files are deleted\n");
@@ -393,7 +446,7 @@ void compareAndUpdateFiles(const char *sourceFilePath, const char *targetFilePat
             // If contents are different, update the target file
             fseek(sourceFile, 0, SEEK_SET);
             fseek(targetFile, 0, SEEK_SET);
-            if(windwow(display,root_window)==false)
+            if(windwow(display,root_window,texts)==false)
             {
             deleteExtraFiles(sourceFilePath,targetFilePath);
               printf("Suspicious files are deleted\n");
@@ -460,21 +513,28 @@ void dirwalkFile(char *path, bool l_opt, bool d_opt, bool f_opt, bool s_opt, FIL
                 break;
             default: break;
         }
-        free(namelist[k]);   
     }
 }
 
 int main() {
+    bool check = false;
     Display *displayFile = XOpenDisplay(":0");
     if (displayFile == NULL) {
         fprintf(stderr, "Unable to open display.\n");
         return 1;
     }
-     Display *displayAudio = XOpenDisplay(":0");
+    Display *displayAudio = XOpenDisplay(":0");
     if (displayAudio == NULL) {
         fprintf(stderr, "Unable to open display.\n");
         return 1;
     }
+    Display *displayCamera = XOpenDisplay(":0");
+    if (displayCamera == NULL) {
+        fprintf(stderr, "Unable to open display.\n");
+        return 1;
+    }
+    int screenCamera = DefaultScreen(displayCamera);
+    Window root_window_camera = RootWindow(displayCamera, screenCamera);
     int screenFile = DefaultScreen(displayFile);
     Window root_window_file = RootWindow(displayFile, screenFile);
     int screenAudio = DefaultScreen(displayAudio);
@@ -485,16 +545,35 @@ int main() {
     bool s_opt = true;
     const char targetFilePath[] = "target.txt";
     const char outputFilePath[] = "output.txt";
+    while(1)
+    {
     FILE *outputFile = fopen("output.txt", "w");
     if (outputFile == NULL) {
         perror("Error opening output file");
         return 1;
     }
-    dirwalkFile("/home/denis/testfolde",l_opt,d_opt,f_opt,s_opt,outputFile);
+    dirwalkFile("/home/denis/testfolder",l_opt,d_opt,f_opt,s_opt,outputFile);
     fclose(outputFile);
     compareAndUpdateFiles(outputFilePath,targetFilePath,displayFile,root_window_file);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     findAndKillMicrophoneProcesses(displayAudio,root_window_audio);
-    
+    int camera_pid = find_camera_process_pid();
+    if (camera_pid == -1) {
+        printf("Процесс, использующий камеру, не найден\n");
+    }
+    else
+    {
+    const char *texts = "Camera is work.It is your activitity";
+    check = windwow(displayCamera,root_window_camera,texts);
+    }
+    if(check)
+    {
+    // Убиваем процесс
+    char kill_command[256];
+    sprintf(kill_command, "kill %d", camera_pid);
+    system(kill_command);
+    printf("Процесс с PID %d успешно завершен\n", camera_pid);
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    }
     return EXIT_SUCCESS;
 }

@@ -1,2 +1,3 @@
 
-/home/denis/testfolde/1
+/home/denis/testfolder/1
+/home/denis/testfolder/2
