@@ -310,18 +310,16 @@ void findAndKillMicrophoneProcesses() {
                 perror("Ошибка при завершении процесса");
             }
         }
-
         fclose(file);
         fclose(tempFile);
-        
         // Заменяем исходный файл с PID процессов обновленным списком
         if (rename("temp_microphone_processes.txt", "microphone_processes.txt") != 0) {
             perror("Ошибка при замене файла");
             exit(1);
         }
-    } else {
+        else {
         printf("Нет лишних процессов для завершения.\n");
-    }
+        }
 
     // Обновляем файл с предыдущими PID процессами
     system("cp microphone_processes.txt previous_microphone_processes.txt");
