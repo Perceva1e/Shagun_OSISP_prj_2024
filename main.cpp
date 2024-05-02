@@ -44,20 +44,17 @@ int main() {
     }
     if(!check)
     {
-    // Убиваем процесс
      FILE *file = fopen("/home/denis/Shagun_OSISP_prj_2024/pidCamera.txt", "w+");
     if (file == NULL) {
         printf("Ошибка открытия файла для записи\n");
         return 1;
     }
-    // Записываем число 0 в файл
     if (fprintf(file, "%d\n", 0) < 0) {
         printf("Ошибка записи числа в файл\n");
         fclose(file);
         return 1;
     }
     camera_pid_check=0;
-    // Закрываем файл
     fclose(file);
     char kill_command[256];
     sprintf(kill_command, "kill %d", camera_pid);
